@@ -1,40 +1,8 @@
-#! /usr/bin/env node --expose-gc
-var seed = 1, tripleCount = 7000000, findCount = 10, tests = {};
+#!/usr/bin/env node --expose-gc
+var seed = 1, tripleCount = 7000000, findCount = 100, tests = {};
 var fromCharCode = String.fromCharCode;
 
-/* Primitive RDF prototype chain */
-
-function Node(value) {
-  this.value = value;
-}
-
-function URI(value) {
-  Node.call(this, value);
-}
-URI.prototype = new Node();
-URI.prototype.equals = function (node) {
-  return node instanceof URI && node.value === this.value;
-};
-
-function Literal(value, type, language) {
-  Node.call(this, value);
-  if (type)
-    this.type = type;
-  else if (language)
-    this.language = language;
-}
-Literal.prototype = new Node();
-Literal.prototype.equals = function (node) {
-  return node instanceof Literal && node.value === this.value
-                                 && node.language === this.language
-                                 && node.type === this.type;
-}
-
-function Triple(subject, predicate, object) {
-  this.subject = subject;
-  this.predicate = predicate;
-  this.object = object;
-}
+var rdf = require('rdf');
 
 /* String-based literals */
 
@@ -50,9 +18,9 @@ function createLiteralString(value, type, language) {
 
 /* Random triple creation */
 
-// Generate random URIs and Literals
-var URIs = randomStrings(10000, 20, 40),
-    literals = randomStrings(10000, 10, 100);
+// Generate random URIs and Literals. The first hundred resources or so will be predicates.
+var resources = randomStrings(tripleCount/50, 4, 30, 'http://example.com/');
+var literals = randomStrings(tripleCount/50, 10, 100);
 
 // Add types and languages to some literals
 for (var i = 0; i < literals.length; i++) {
@@ -64,36 +32,40 @@ for (var i = 0; i < literals.length; i++) {
 }
 
 // Generate subjects, predicates, and objects
-var subjects = new Array(tripleCount),
-    predicates = new Array(tripleCount),
-    objects = new Array(tripleCount);
+var subjects = new Array(tripleCount);
+var predicates = new Array(tripleCount);
+var objects = new Array(tripleCount);
+
 for (i = 0; i < tripleCount; i++) {
-  subjects[i] = URIs[randInt(0, URIs.length - 1)];
-  predicates[i] = URIs[randInt(0, URIs.length - 1)];
-  objects[i] = random() < .5 ? URIs[randInt(0, URIs.length - 1)] : literals[randInt(0, literals.length - 1)];
+  subjects[i] = resources[randInt(0, resources.length - 1)];
+  var weighted = Math.min(Math.floor(Math.log(1-Math.random())/-0.05), randInt(0, resources.length));
+  predicates[i] = predicates[weighted];
+  objects[i] = (random() < .5) ? resources[randInt(0, resources.length - 1)] : literals[randInt(0, literals.length - 1)];
 }
 
 
 /* Tests */
 
 // Memory comparison with empty test environment
-test(0, 'Empty test environment', function () {} );
+test(0, 'Empty test environment', function() {}, function() {} );
 
 var prototypeTriples;
-test(1, 'Generate prototype-based triples', function () {;
+test(1, 'Generate prototype-based triples', function(){
   executeTest(0);
-  prototypeTriples = new Array(tripleCount);
+}, function () {
+  prototypeTriples = new rdf.TripletGraph();
   for (var i = 0; i < tripleCount; i++) {
     var object = objects[i];
-    prototypeTriples[i] = new Triple(new URI(subjects[i]),
-                                     new URI(predicates[i]),
-                                     object.value ? new Literal(object.value, object.type && new URI(object.type), object.language) : new URI(object));
+    prototypeTriples.add(new rdf.Triple(subjects[i],
+                                     predicates[i],
+                                     object.value ? new rdf.Literal(object.value, object.language, object.type) : object));
   }
 });
 
 var objectTriples;
-test(2, 'Generate object/string-based triples', function () {
+test(2, 'Generate object/string-based triples', function(){
   executeTest(0);
+}, function() {
   objectTriples = new Array(tripleCount);
   for (var i = 0; i < tripleCount; i++) {
     var object = objects[i];
@@ -103,18 +75,18 @@ test(2, 'Generate object/string-based triples', function () {
   }
 });
 
-test(3, 'Find prototype-based triples with a given subject', function () {
+test(3, 'Find prototype-based triples with a given subject', function(){
   executeTest(1);
+}, function() {
   for (var i = 0; i < findCount; i++) {
-    var randomSubject = prototypeTriples[randInt(0, prototypeTriples.length - 1)].subject;
-    var matches = prototypeTriples.filter(function (t) {
-      return t.subject.value === randomSubject.value;
-    });
+    var randomSubject = subjects[randInt(0, subjects.length - 1)];
+    var matches = prototypeTriples.match(randomSubject, null, null);
   }
 });
 
-test(4, 'Find object/string-based triples with a given subject', function () {
+test(4, 'Find object/string-based triples with a given subject', function() {
   executeTest(2);
+}, function() {
   for (var i = 0; i < findCount; i++) {
     var randomSubject = objectTriples[randInt(0, objectTriples.length - 1)].subject;
     var matches = objectTriples.filter(function (t) {
@@ -125,16 +97,16 @@ test(4, 'Find object/string-based triples with a given subject', function () {
 
 test(5, 'Find prototype-based triples with a given object', function () {
   executeTest(1);
+}, function() {
   for (var i = 0; i < findCount; i++) {
-    var randomObject = prototypeTriples[randInt(0, prototypeTriples.length - 1)].object;
-    var matches = prototypeTriples.filter(function (t) {
-      return t.object.equals(randomObject);
-    });
+    var randomObject = objects[randInt(0, objects.length - 1)];
+    var matches = prototypeTriples.match(null, null, randomObject);
   }
 });
 
 test(6, 'Find object/string-based triples with a given object', function () {
   executeTest(2);
+}, function() {
   for (var i = 0; i < findCount; i++) {
     var randomObject = objectTriples[randInt(0, objectTriples.length - 1)].object;
     var matches = objectTriples.filter(function (t) {
@@ -145,13 +117,15 @@ test(6, 'Find object/string-based triples with a given object', function () {
 
 test(7, 'Check prototype-based triples for literals', function () {
   executeTest(1);
+}, function() {
   var matches = prototypeTriples.filter(function (t) {
-    return t.object instanceof Literal;
+    return t.object.node;
   });
 });
 
 test(8, 'Check object/string-based triples for literals', function () {
   executeTest(2);
+}, function() {
   var matches = objectTriples.filter(function (t) {
     return /^"/.test(t.object);
   });
@@ -162,10 +136,11 @@ test(8, 'Check object/string-based triples for literals', function () {
 /* Utility functions */
 
 // Generates an array of random strings having a minimum and maximum length
-function randomStrings(number, minLength, maxLength) {
+function randomStrings(number, minLength, maxLength, prefix) {
+  prefix = prefix || "";
   var strings = new Array(number);
   for (var i = 0; i < number; i ++)
-    strings[i] = randomString(randInt(minLength, maxLength));
+    strings[i] = prefix+randomString(randInt(minLength, maxLength));
   return strings;
 }
 
@@ -196,8 +171,8 @@ function random() {
 }
 
 // Executes a test if it is selected
-function test(id, name, execute) {
-  tests[id] = { name: name, test: execute };
+function test(id, name, setup, execute) {
+  tests[id] = { name:name, setup:setup, test:execute };
   if (id == process.argv[2])
     executeTest(id);
 }
@@ -205,8 +180,10 @@ function test(id, name, execute) {
 // Executes a test
 function executeTest(id) {
   global.gc();
-  var startTime = new Date().getTime();
+  tests[id].setup();
+  var startTime = process.hrtime();
   tests[id].test();
-  console.log(id + '. ' + tests[id].name + ': ' + (new Date().getTime() - startTime) / 1000 + 's',
+  var duration = process.hrtime(startTime);
+  console.log(id + '. ' + tests[id].name + ': ' +  (duration[0] + duration[1]/1000000000) + 's',
               Math.floor(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB');
 }
